@@ -1,0 +1,22 @@
+# Environment variables and secrets (NEVER commit these)
+.env
+*.env.local
+
+# macOS system files
+.DS_Store
+
+# Node.js dependencies & builds (if using React, Node, Vite, etc.)
+node_modules/
+dist/
+build/
+
+# Python virtual environments & caches (if using FastAPI, Flask, Streamlit, etc.)
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# IDE / Editor settings
+.vscode/
+.idea/

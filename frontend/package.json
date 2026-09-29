@@ -16,7 +16,8 @@
     "start:backend:tsx": "tsx backend/src/server.ts",
     "typecheck:backend": "tsc --noEmit -p backend/tsconfig.json"
   },
-  "dependencies": {
+"dependencies": {
+    "zod": "^3.22.4",
     "@supabase/supabase-js": "^2.57.4",
     "framer-motion": "^13.2.0",
     "lucide-react": "^0.446.0",

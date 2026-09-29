@@ -1,9 +1,12 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
+/* stylelint-disable at-rule-no-unknown */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+/* stylelint-enable at-rule-no-unknown */
 
+/* stylelint-disable at-rule-no-unknown */
 @layer base {
   * {
     @apply border-ink-700;
@@ -12,6 +15,7 @@
     @apply bg-ink-950 text-ink-100 font-sans antialiased;
   }
 }
+/* stylelint-enable at-rule-no-unknown */
 
 @layer utilities {
   .scrollbar-thin {

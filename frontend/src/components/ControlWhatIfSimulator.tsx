@@ -1,81 +1,28 @@
 // src/components/ControlWhatIfSimulator.tsx
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, {
+  useState,
+  useMemo,
+  useCallback,
+  useEffect,
+  useRef,
+  memo,
+} from 'react';
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  RadarChart,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
-  Radar,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis,
+  PolarRadiusAxis, Radar,
 } from 'recharts';
 import {
-  Sliders,
-  Sparkles,
-  Zap,
-  Shield,
-  ShieldCheck,
-  ShieldAlert,
-  Brain,
-  Fingerprint,
-  PowerOff,
-  TrendingUp,
-  TrendingDown,
-  DollarSign,
-  Activity,
-  RotateCcw,
-  Gauge,
-  Target,
-  Wand2,
-  TrendingUp as TrendIcon,
+  Sliders, Sparkles, Zap, Shield, ShieldAlert, Brain, Fingerprint,
+  PowerOff, TrendingUp, TrendingDown, DollarSign, Activity, RotateCcw,
+  Gauge, Target, Wand2, TrendingUp as TrendIcon,
 } from 'lucide-react';
-interface BackendSimulationResponse {
-  success: boolean;
-  recommendation?: string;
-  metrics?: {
-    simulatedEal?: number;
-    netRoi?: number;
-  };
-  trendForecast?: Array<{
-    month: string;
-    projectedEal: number;
-    projectedVar: number;
-  }>;
-}
-
-const runRiskSimulation = async (
-  activeControls: string[],
-  riskScore: number
-): Promise<BackendSimulationResponse> => {
-  const response = await fetch('/api/risk/simulate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ activeControls, riskScore }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Risk simulation failed: ${response.status}`);
-  }
-
-  return response.json() as Promise<BackendSimulationResponse>;
-};
 
 // ============================================================
-// TypeScript Interfaces
+// Types
 // ============================================================
 
-type ControlDomain =
-  | 'shadow-it'
-  | 'presidio'
-  | 'zero-trust'
-  | 'circuit-breaker';
-
+type ControlDomain = 'shadow-it' | 'presidio' | 'zero-trust' | 'circuit-breaker';
 type PresetId = 'max-ai' | 'cost-optimized' | 'aggressive-compliance' | 'custom';
 
 interface ControlDefinition {
@@ -85,11 +32,8 @@ interface ControlDefinition {
   description: string;
   icon: React.ElementType;
   accent: string;
-  /** Maximum theoretical risk reduction if 100% funded (%) */
   maxRiskReduction: number;
-  /** Cost per percentage point of coverage ($K / 1%) */
   costPerPoint: number;
-  /** Baseline coverage in the current environment (%) */
   baselineCoverage: number;
 }
 
@@ -98,21 +42,15 @@ interface PresetScenario {
   name: string;
   description: string;
   icon: React.ElementType;
-  /** Coverage assignments per control domain (0-100) */
   coverage: Record<ControlDomain, number>;
   accent: string;
 }
 
 interface SimulationMetrics {
-  /** Total annual budget in $K */
-  annualBudget: number;
-  /** Total exposure in $M */
-  totalExposure: number;
-  /** Overall residual risk index (0-100, higher = worse) */
-  riskIndex: number;
-  /** ROSI (%) */
-  rosI: number;
-  /** Per-domain risk mitigation % */
+  annualBudget: number;       // $K
+  totalExposure: number;      // $M
+  riskIndex: number;          // 0-100
+  rosI: number;               // %
   mitigationByDomain: Record<ControlDomain, number>;
 }
 
@@ -123,9 +61,66 @@ interface ComparisonCard {
   baselineValue: number;
   simulatedValue: number;
   format: 'currency' | 'index' | 'percent';
-  /** Whether a lower simulated value is better */
   lowerIsBetter: boolean;
 }
+
+// ============================================================
+// [FIX #1 & #3] Backend contract — keys and units are documented.
+//               Monetary fields are in raw USD DOLLARS, not $M.
+// ============================================================
+
+interface BackendSimulationResponse {
+  success: boolean;
+  recommendation?: string;
+  metrics?: {
+    baselineEal?: number;   // dollars
+    simulatedEal?: number;  // dollars
+    baselineVar?: number;   // dollars
+    simulatedVar?: number;  // dollars
+    ealSavings?: number;    // dollars
+    netRoi?: number;        // percent
+  };
+  trendForecast?: Array<{
+    month: string;
+    projectedEal: number;   // dollars
+    projectedVar: number;   // dollars
+  }>;
+}
+
+// ============================================================
+// [FIX #2] Translate frontend domain IDs → backend controlImpacts keys.
+// The backend's `/api/risk/simulate` recognises these 5 keys only:
+//   mfa_privileged, zero_trust_segmentation, edr_deployment,
+//   cloud_cspm, patch_automation
+// ============================================================
+
+const BACKEND_CONTROL_MAP: Record<ControlDomain, string> = {
+  'shadow-it': 'cloud_cspm',
+  'presidio': 'patch_automation',
+  'zero-trust': 'zero_trust_segmentation',
+  'circuit-breaker': 'edr_deployment',
+};
+
+// ============================================================
+// [FIX #1] Corrected request body keys + AbortController support.
+// ============================================================
+
+const runRiskSimulation = async (
+  selectedControls: string[],
+  threatLevel: number,
+  signal?: AbortSignal
+): Promise<BackendSimulationResponse> => {
+  const response = await fetch('/api/risk/simulate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selectedControls, threatLevel }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Risk simulation failed: ${response.status}`);
+  }
+  return (await response.json()) as BackendSimulationResponse;
+};
 
 // ============================================================
 // Mock Data — Control Definitions
@@ -136,8 +131,7 @@ const CONTROLS: ControlDefinition[] = [
     id: 'shadow-it',
     name: 'Shadow IT Remediation',
     shortName: 'Shadow IT',
-    description:
-      'Discovery & enforcement of unsanctioned SaaS, cloud, and endpoint tools.',
+    description: 'Discovery & enforcement of unsanctioned SaaS, cloud, and endpoint tools.',
     icon: ShieldAlert,
     accent: '#f59e0b',
     maxRiskReduction: 22,
@@ -148,8 +142,7 @@ const CONTROLS: ControlDefinition[] = [
     id: 'presidio',
     name: 'LLM Presidio Sanitization',
     shortName: 'Presidio PII',
-    description:
-      'Inline PII/PHI redaction for all LLM prompts and agent I/O streams.',
+    description: 'Inline PII/PHI redaction for all LLM prompts and agent I/O streams.',
     icon: Brain,
     accent: '#06b6d4',
     maxRiskReduction: 26,
@@ -160,8 +153,7 @@ const CONTROLS: ControlDefinition[] = [
     id: 'zero-trust',
     name: 'Zero Trust Identity',
     shortName: 'Zero Trust',
-    description:
-      'Continuous verification, MFA, and least-privilege enforcement across identities.',
+    description: 'Continuous verification, MFA, and least-privilege enforcement across identities.',
     icon: Fingerprint,
     accent: '#10b981',
     maxRiskReduction: 32,
@@ -172,8 +164,7 @@ const CONTROLS: ControlDefinition[] = [
     id: 'circuit-breaker',
     name: 'Agentic Circuit Breakers',
     shortName: 'Circuit Breakers',
-    description:
-      'Auto-isolation of compromised LLM agents before cascade propagation.',
+    description: 'Auto-isolation of compromised LLM agents before cascade propagation.',
     icon: PowerOff,
     accent: '#f43f5e',
     maxRiskReduction: 20,
@@ -182,9 +173,14 @@ const CONTROLS: ControlDefinition[] = [
   },
 ];
 
-// ============================================================
-// Scenario Presets
-// ============================================================
+// [FIX #7] Precompute baseline mitigation once (was recomputed per render).
+const BASELINE_MITIGATION: Record<ControlDomain, number> = CONTROLS.reduce(
+  (acc, ctrl) => {
+    acc[ctrl.id] = (ctrl.baselineCoverage / 100) * ctrl.maxRiskReduction;
+    return acc;
+  },
+  {} as Record<ControlDomain, number>
+);
 
 const PRESETS: PresetScenario[] = [
   {
@@ -193,12 +189,7 @@ const PRESETS: PresetScenario[] = [
     description: 'Full AI-native controls; ignores cost efficiency.',
     icon: Sparkles,
     accent: '#06b6d4',
-    coverage: {
-      'shadow-it': 80,
-      presidio: 100,
-      'zero-trust': 85,
-      'circuit-breaker': 95,
-    },
+    coverage: { 'shadow-it': 80, presidio: 100, 'zero-trust': 85, 'circuit-breaker': 95 },
   },
   {
     id: 'cost-optimized',
@@ -206,12 +197,7 @@ const PRESETS: PresetScenario[] = [
     description: 'Best ROSI per dollar spent across control domains.',
     icon: DollarSign,
     accent: '#10b981',
-    coverage: {
-      'shadow-it': 55,
-      presidio: 70,
-      'zero-trust': 75,
-      'circuit-breaker': 45,
-    },
+    coverage: { 'shadow-it': 55, presidio: 70, 'zero-trust': 75, 'circuit-breaker': 45 },
   },
   {
     id: 'aggressive-compliance',
@@ -219,23 +205,14 @@ const PRESETS: PresetScenario[] = [
     description: 'SEBI CSCRF hardening; maximizes audit posture.',
     icon: Shield,
     accent: '#f59e0b',
-    coverage: {
-      'shadow-it': 90,
-      presidio: 75,
-      'zero-trust': 100,
-      'circuit-breaker': 70,
-    },
+    coverage: { 'shadow-it': 90, presidio: 75, 'zero-trust': 100, 'circuit-breaker': 70 },
   },
 ];
 
-// ============================================================
-// Baseline Constants (fed from global state in production)
-// ============================================================
-
 const BASELINE_METRICS: SimulationMetrics = {
-  annualBudget: 6_500, // $K
-  totalExposure: 48.5, // $M
-  riskIndex: 64, // 0-100
+  annualBudget: 6_500,
+  totalExposure: 48.5,
+  riskIndex: 64,
   rosI: 0,
   mitigationByDomain: {
     'shadow-it': 42 * 0.22,
@@ -245,23 +222,12 @@ const BASELINE_METRICS: SimulationMetrics = {
   },
 };
 
-const MAX_EXPOSURE_REDUCTION = 0.85; // ceiling on total risk reduction
+const MAX_EXPOSURE_REDUCTION = 0.85;
 
 // ============================================================
 // Calculation Engine
 // ============================================================
 
-/**
- * Calculates simulation metrics from coverage percentages per domain.
- *
- * Model:
- *   mitigation_domain = (coverage/100) * maxRiskReduction
- *   totalMitigation   = Σ mitigation_domain  (capped at MAX_EXPOSURE_REDUCTION)
- *   totalExposure     = BASELINE_EXPOSURE * (1 - totalMitigation/100)
- *   annualBudget      = Σ (coverage * costPerPoint)
- *   riskIndex         = 100 * (1 - totalMitigation/100)
- *   rosI              = ((baselineExposure - simulatedExposure) - Δbudget) / Δbudget
- */
 const simulate = (
   coverage: Record<ControlDomain, number>,
   baseline: SimulationMetrics
@@ -269,29 +235,26 @@ const simulate = (
   let totalMitigationPct = 0;
   let annualBudget = 0;
   const mitigationByDomain: Record<ControlDomain, number> = {
-    'shadow-it': 0,
-    presidio: 0,
-    'zero-trust': 0,
-    'circuit-breaker': 0,
+    'shadow-it': 0, presidio: 0, 'zero-trust': 0, 'circuit-breaker': 0,
   };
 
-  CONTROLS.forEach((ctrl) => {
-    const domainCoverage = coverage[ctrl.id];
-    const mitigation = (domainCoverage / 100) * ctrl.maxRiskReduction;
+  for (const ctrl of CONTROLS) {
+    const c = coverage[ctrl.id];
+    const mitigation = (c / 100) * ctrl.maxRiskReduction;
     mitigationByDomain[ctrl.id] = mitigation;
     totalMitigationPct += mitigation;
-    // Budget model: quadratic cost curve so 100% costs more than linear
-    const efficiency = 1 + Math.pow(domainCoverage / 100, 1.6);
-    annualBudget += (domainCoverage * ctrl.costPerPoint * efficiency) / 100;
-  });
+    const efficiency = 1 + Math.pow(c / 100, 1.6);
+    annualBudget += (c * ctrl.costPerPoint * efficiency) / 100;
+  }
 
   const cappedMitigation = Math.min(totalMitigationPct, MAX_EXPOSURE_REDUCTION * 100);
   const totalExposure = baseline.totalExposure * (1 - cappedMitigation / 100);
   const riskIndex = Math.max(2, 100 * (1 - cappedMitigation / 100));
 
   const deltaBudget = annualBudget - baseline.annualBudget;
-  const avoidedLoss = (baseline.totalExposure - totalExposure) * 1_000; // $K
-  const rosI = deltaBudget > 0 ? ((avoidedLoss - deltaBudget) / deltaBudget) * 100 : 0;
+  const avoidedLoss = (baseline.totalExposure - totalExposure) * 1_000;
+  const rosI =
+    deltaBudget > 0 ? ((avoidedLoss - deltaBudget) / deltaBudget) * 100 : 0;
 
   return {
     annualBudget: Math.round(annualBudget),
@@ -303,35 +266,40 @@ const simulate = (
 };
 
 // ============================================================
-// Formatting Helpers
+// Formatting
 // ============================================================
 
-const formatMetric = (
-  value: number,
-  format: ComparisonCard['format']
-): string => {
+const formatMetric = (value: number, format: ComparisonCard['format']): string => {
   switch (format) {
-    case 'currency':
-      return `$${value.toFixed(2)}M`;
-    case 'index':
-      return value.toFixed(1);
-    case 'percent':
-      return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
+    case 'currency': return `$${value.toFixed(2)}M`;
+    case 'index':    return value.toFixed(1);
+    case 'percent':  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`;
   }
 };
 
 // ============================================================
-// Sub-Component: Custom Tooltip for BarChart
+// [FIX #6] Hoisted chart theme (was re-created every render)
 // ============================================================
 
-interface BarTooltipProps {
+const CHART_THEME = {
+  grid: '#1e293b',
+  axis: '#64748b',
+  tick: { fill: '#94a3b8', fontSize: 11 },
+} as const;
+
+// ============================================================
+// [FIX #5] Memoized Tooltips
+// ============================================================
+
+interface ChartTooltipEntry { name: string; value: number; color: string; }
+interface ChartTooltipProps {
   active?: boolean;
-  payload?: Array<{ name: string; value: number; color: string }>;
+  payload?: ChartTooltipEntry[];
   label?: string;
 }
 
-const BarTooltip: React.FC<BarTooltipProps> = ({ active, payload, label }) => {
-  if (!active || !payload || payload.length === 0) return null;
+const BarTooltip = memo<ChartTooltipProps>(({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
   return (
     <div className="bg-slate-950 border border-slate-700 rounded-lg p-3 shadow-2xl">
       <p className="text-xs font-semibold text-white mb-2">{label}</p>
@@ -347,16 +315,11 @@ const BarTooltip: React.FC<BarTooltipProps> = ({ active, payload, label }) => {
       </div>
     </div>
   );
-};
+});
+BarTooltip.displayName = 'BarTooltip';
 
-interface RadarTooltipProps {
-  active?: boolean;
-  payload?: Array<{ name: string; value: number; color: string }>;
-  label?: string;
-}
-
-const RadarTooltip: React.FC<RadarTooltipProps> = ({ active, payload, label }) => {
-  if (!active || !payload || payload.length === 0) return null;
+const RadarTooltip = memo<ChartTooltipProps>(({ active, payload, label }) => {
+  if (!active || !payload?.length) return null;
   return (
     <div className="bg-slate-950 border border-slate-700 rounded-lg p-3 shadow-2xl">
       <p className="text-xs font-semibold text-white mb-2">{label}</p>
@@ -372,21 +335,20 @@ const RadarTooltip: React.FC<RadarTooltipProps> = ({ active, payload, label }) =
       </div>
     </div>
   );
-};
+});
+RadarTooltip.displayName = 'RadarTooltip';
 
 // ============================================================
-// Sub-Component: Comparison Card
+// [FIX #5] Memoized Comparison Card
 // ============================================================
 
-interface ComparisonCardViewProps {
-  card: ComparisonCard;
-}
-
-const ComparisonCardView: React.FC<ComparisonCardViewProps> = ({ card }) => {
+const ComparisonCardView = memo<{ card: ComparisonCard }>(({ card }) => {
   const Icon = card.icon;
   const delta = card.simulatedValue - card.baselineValue;
   const pctChange =
-    card.baselineValue !== 0 ? (delta / Math.abs(card.baselineValue)) * 100 : 0;
+    card.baselineValue !== 0
+      ? (delta / Math.abs(card.baselineValue)) * 100
+      : 0;
 
   const isImprovement = card.lowerIsBetter ? delta < -0.001 : delta > 0.001;
   const isWorsening = card.lowerIsBetter ? delta > 0.001 : delta < -0.001;
@@ -396,13 +358,14 @@ const ComparisonCardView: React.FC<ComparisonCardViewProps> = ({ card }) => {
     : isWorsening
     ? 'text-rose-400'
     : 'text-slate-400';
+
   const accentBg = isImprovement
     ? 'bg-emerald-500/10 border-emerald-500/30'
     : isWorsening
     ? 'bg-rose-500/10 border-rose-500/30'
     : 'bg-slate-800/50 border-slate-700';
-  const DeltaIcon =
-    isImprovement ? TrendingDown : isWorsening ? TrendingUp : Activity;
+
+  const DeltaIcon = isImprovement ? TrendingDown : isWorsening ? TrendingUp : Activity;
 
   return (
     <div className={`bg-slate-900/80 border rounded-xl p-4 ${accentBg}`}>
@@ -413,26 +376,20 @@ const ComparisonCardView: React.FC<ComparisonCardViewProps> = ({ card }) => {
         </div>
         <DeltaIcon className={`w-3.5 h-3.5 ${accentColor}`} />
       </div>
-
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
-          <p className="text-[10px] text-slate-500 uppercase tracking-wide mb-0.5">
-            Baseline
-          </p>
+          <p className="text-[10px] text-slate-500 uppercase tracking-wide mb-0.5">Baseline</p>
           <p className="text-lg font-bold font-mono text-slate-400 tabular-nums">
             {formatMetric(card.baselineValue, card.format)}
           </p>
         </div>
         <div>
-          <p className="text-[10px] text-slate-500 uppercase tracking-wide mb-0.5">
-            Simulated
-          </p>
+          <p className="text-[10px] text-slate-500 uppercase tracking-wide mb-0.5">Simulated</p>
           <p className={`text-lg font-bold font-mono tabular-nums ${accentColor}`}>
             {formatMetric(card.simulatedValue, card.format)}
           </p>
         </div>
       </div>
-
       <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
         <span className="text-[10px] text-slate-500">Delta</span>
         <span className={`text-xs font-mono font-semibold ${accentColor}`}>
@@ -443,10 +400,11 @@ const ComparisonCardView: React.FC<ComparisonCardViewProps> = ({ card }) => {
       </div>
     </div>
   );
-};
+});
+ComparisonCardView.displayName = 'ComparisonCardView';
 
 // ============================================================
-// Sub-Component: Control Slider
+// [FIX #5] Memoized Control Slider
 // ============================================================
 
 interface ControlSliderProps {
@@ -455,10 +413,9 @@ interface ControlSliderProps {
   onChange: (id: ControlDomain, value: number) => void;
 }
 
-const ControlSlider: React.FC<ControlSliderProps> = ({ control, value, onChange }) => {
+const ControlSlider = memo<ControlSliderProps>(({ control, value, onChange }) => {
   const Icon = control.icon;
-  const baseline = control.baselineCoverage;
-  const delta = value - baseline;
+  const delta = value - control.baselineCoverage;
 
   return (
     <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-4">
@@ -481,16 +438,10 @@ const ControlSlider: React.FC<ControlSliderProps> = ({ control, value, onChange 
           </div>
         </div>
         <div className="text-right shrink-0 ml-2">
-          <p className="text-lg font-bold font-mono text-white tabular-nums">
-            {value}%
-          </p>
+          <p className="text-lg font-bold font-mono text-white tabular-nums">{value}%</p>
           <p
             className={`text-[10px] font-mono ${
-              delta > 0
-                ? 'text-emerald-400'
-                : delta < 0
-                ? 'text-rose-400'
-                : 'text-slate-500'
+              delta > 0 ? 'text-emerald-400' : delta < 0 ? 'text-rose-400' : 'text-slate-500'
             }`}
           >
             {delta >= 0 ? '+' : ''}
@@ -498,7 +449,6 @@ const ControlSlider: React.FC<ControlSliderProps> = ({ control, value, onChange 
           </p>
         </div>
       </div>
-
       <input
         type="range"
         min={0}
@@ -510,113 +460,99 @@ const ControlSlider: React.FC<ControlSliderProps> = ({ control, value, onChange 
         style={{ accentColor: control.accent }}
         aria-label={`${control.name} coverage`}
       />
-
       <div className="flex items-center justify-between mt-1.5 text-[10px] font-mono text-slate-600">
         <span>0%</span>
-        <span className="text-slate-500">
-          Baseline: {baseline}%
-        </span>
+        <span className="text-slate-500">Baseline: {control.baselineCoverage}%</span>
         <span>100%</span>
       </div>
     </div>
   );
-};
+});
+ControlSlider.displayName = 'ControlSlider';
 
 // ============================================================
 // Main Component
 // ============================================================
 
 export default function ControlWhatIfSimulator(): JSX.Element {
-  // Initialize coverage from baseline
   const initialCoverage = useMemo<Record<ControlDomain, number>>(() => {
     const init: Record<ControlDomain, number> = {
-      'shadow-it': 0,
-      presidio: 0,
-      'zero-trust': 0,
-      'circuit-breaker': 0,
+      'shadow-it': 0, presidio: 0, 'zero-trust': 0, 'circuit-breaker': 0,
     };
-    CONTROLS.forEach((ctrl) => {
-      init[ctrl.id] = ctrl.baselineCoverage;
-    });
+    for (const ctrl of CONTROLS) init[ctrl.id] = ctrl.baselineCoverage;
     return init;
   }, []);
 
-  const [coverage, setCoverage] = useState<Record<ControlDomain, number>>(
-    initialCoverage
-  );
+  const [coverage, setCoverage] = useState<Record<ControlDomain, number>>(initialCoverage);
   const [activePreset, setActivePreset] = useState<PresetId>('custom');
   const [chartType, setChartType] = useState<'bar' | 'radar'>('bar');
-
-  // Pain Point 10 Backend API State
   const [backendResponse, setBackendResponse] = useState<BackendSimulationResponse | null>(null);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
-  // Run simulation whenever coverage changes
-  const simulated = useMemo(
-    () => simulate(coverage, BASELINE_METRICS),
-    [coverage]
-  );
+  // [FIX #4] AbortController ref — cancels stale in-flight requests
+  const abortRef = useRef<AbortController | null>(null);
 
-  // Asynchronous sync function with Pain Point 10 Backend Endpoint
-  const syncWithBackend = useCallback(async (currentCoverage: Record<ControlDomain, number>) => {
-    setIsSyncing(true);
-    try {
-      const activeControls = Object.entries(currentCoverage)
-        .filter(([_, val]) => val > 40)
-        .map(([key]) => key);
+  const simulated = useMemo(() => simulate(coverage, BASELINE_METRICS), [coverage]);
 
-      const response = await runRiskSimulation(activeControls, 62);
-      if (response && response.success) {
-        setBackendResponse(response);
+  // [FIX #1, #2, #4] Sync to backend with correct keys, control ID mapping, and abort
+  const syncWithBackend = useCallback(
+    async (currentCoverage: Record<ControlDomain, number>) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setIsSyncing(true);
+      try {
+        const selectedControls = (Object.keys(currentCoverage) as ControlDomain[])
+          .filter((id) => currentCoverage[id] > 40)
+          .map((id) => BACKEND_CONTROL_MAP[id]);
+
+        const response = await runRiskSimulation(selectedControls, 62, controller.signal);
+        if (response?.success) setBackendResponse(response);
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          console.error('Failed to sync simulation with backend:', err);
+        }
+      } finally {
+        if (abortRef.current === controller) setIsSyncing(false);
       }
-    } catch (err) {
-      console.error('Failed to sync simulation with backend:', err);
-    } finally {
-      setIsSyncing(false);
-    }
-  }, []);
-
-  // Sync to server on coverage slider changes with 300ms debounce
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      syncWithBackend(coverage);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [coverage, syncWithBackend]);
-
-  // Handle coverage change
-  const handleCoverageChange = useCallback(
-    (id: ControlDomain, value: number) => {
-      setCoverage((prev) => ({ ...prev, [id]: value }));
-      setActivePreset('custom');
     },
     []
   );
 
-  // Apply preset
+  // Debounced sync on coverage change
+  useEffect(() => {
+    const timer = setTimeout(() => syncWithBackend(coverage), 300);
+    return () => clearTimeout(timer);
+  }, [coverage, syncWithBackend]);
+
+  // Cleanup on unmount
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  const handleCoverageChange = useCallback((id: ControlDomain, value: number) => {
+    setCoverage((prev) => ({ ...prev, [id]: value }));
+    setActivePreset('custom');
+  }, []);
+
   const applyPreset = useCallback((preset: PresetScenario) => {
     setCoverage({ ...preset.coverage });
     setActivePreset(preset.id);
   }, []);
 
-  // Reset to baseline
   const resetToBaseline = useCallback(() => {
     setCoverage({ ...initialCoverage });
     setActivePreset('custom');
   }, [initialCoverage]);
 
-  // Detach preset label if user customizes after applying
   useEffect(() => {
     if (activePreset === 'custom') return;
     const preset = PRESETS.find((p) => p.id === activePreset);
     if (!preset) return;
-    const isMatch = CONTROLS.every(
-      (ctrl) => preset.coverage[ctrl.id] === coverage[ctrl.id]
-    );
+    const isMatch = CONTROLS.every((ctrl) => preset.coverage[ctrl.id] === coverage[ctrl.id]);
     if (!isMatch) setActivePreset('custom');
   }, [coverage, activePreset]);
 
-  // Build comparison cards
+  // [FIX #3] Convert backend EAL from dollars → $M before formatting
   const comparisonCards: ComparisonCard[] = useMemo(
     () => [
       {
@@ -624,7 +560,10 @@ export default function ControlWhatIfSimulator(): JSX.Element {
         label: 'Total Exposure',
         icon: DollarSign,
         baselineValue: BASELINE_METRICS.totalExposure,
-        simulatedValue: backendResponse?.metrics?.simulatedEal ?? simulated.totalExposure,
+        simulatedValue:
+          backendResponse?.metrics?.simulatedEal != null
+            ? backendResponse.metrics.simulatedEal / 1_000_000
+            : simulated.totalExposure,
         format: 'currency',
         lowerIsBetter: true,
       },
@@ -650,34 +589,26 @@ export default function ControlWhatIfSimulator(): JSX.Element {
     [simulated, backendResponse]
   );
 
-  // Build chart data — bar chart comparing baseline vs simulated mitigation per domain
-  const barChartData = useMemo(() => {
-    return CONTROLS.map((ctrl) => {
-      const baselineMitigation = (ctrl.baselineCoverage / 100) * ctrl.maxRiskReduction;
-      const simulatedMitigation = simulated.mitigationByDomain[ctrl.id];
-      return {
+  // [FIX #7] Uses precomputed BASELINE_MITIGATION
+  const barChartData = useMemo(
+    () =>
+      CONTROLS.map((ctrl) => ({
         name: ctrl.shortName,
-        Baseline: Number(baselineMitigation.toFixed(1)),
-        Simulated: Number(simulatedMitigation.toFixed(1)),
-      };
-    });
-  }, [simulated]);
+        Baseline: Number(BASELINE_MITIGATION[ctrl.id].toFixed(1)),
+        Simulated: Number(simulated.mitigationByDomain[ctrl.id].toFixed(1)),
+      })),
+    [simulated]
+  );
 
-  // Radar chart data — normalized coverage % per domain
-  const radarChartData = useMemo(() => {
-    return CONTROLS.map((ctrl) => ({
-      domain: ctrl.shortName,
-      Baseline: ctrl.baselineCoverage,
-      Simulated: coverage[ctrl.id],
-    }));
-  }, [coverage]);
-
-  // Chart theme
-  const chartTheme = {
-    grid: '#1e293b',
-    axis: '#64748b',
-    tick: { fill: '#94a3b8', fontSize: 11 },
-  };
+  const radarChartData = useMemo(
+    () =>
+      CONTROLS.map((ctrl) => ({
+        domain: ctrl.shortName,
+        Baseline: ctrl.baselineCoverage,
+        Simulated: coverage[ctrl.id],
+      })),
+    [coverage]
+  );
 
   return (
     <section
@@ -717,8 +648,6 @@ export default function ControlWhatIfSimulator(): JSX.Element {
             <RotateCcw className="w-3 h-3" />
             Reset Baseline
           </button>
-
-          {/* Chart type switcher */}
           <div className="flex items-center gap-1 p-1 bg-slate-900/80 border border-slate-800 rounded-lg">
             {(['bar', 'radar'] as const).map((type) => (
               <button
@@ -738,7 +667,7 @@ export default function ControlWhatIfSimulator(): JSX.Element {
         </div>
       </div>
 
-      {/* Preset Scenarios */}
+      {/* Presets */}
       <div className="mb-5">
         <div className="flex items-center gap-2 mb-2.5">
           <Wand2 className="w-3.5 h-3.5 text-amber-400" />
@@ -759,43 +688,29 @@ export default function ControlWhatIfSimulator(): JSX.Element {
                     ? 'bg-slate-800/80 shadow-lg'
                     : 'bg-slate-900/60 border-slate-800 hover:border-slate-700 hover:bg-slate-900/80'
                 }`}
-                style={
-                  isActive
-                    ? { borderColor: `${preset.accent}66` }
-                    : undefined
-                }
+                style={isActive ? { borderColor: `${preset.accent}66` } : undefined}
                 aria-pressed={isActive}
               >
                 <div className="flex items-center gap-2 mb-1.5">
-                  <div
-                    className="p-1 rounded"
-                    style={{
-                      backgroundColor: `${preset.accent}15`,
-                    }}
-                  >
+                  <div className="p-1 rounded" style={{ backgroundColor: `${preset.accent}15` }}>
                     <Icon className="w-3 h-3" style={{ color: preset.accent }} />
                   </div>
-                  <span className="text-xs font-semibold text-white">
-                    {preset.name}
-                  </span>
+                  <span className="text-xs font-semibold text-white">{preset.name}</span>
                   {isActive && (
                     <span className="ml-auto text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
                       Active
                     </span>
                   )}
                 </div>
-                <p className="text-[10px] text-slate-500 leading-snug">
-                  {preset.description}
-                </p>
+                <p className="text-[10px] text-slate-500 leading-snug">{preset.description}</p>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Main Layout: Sliders | Chart + Comparison */}
+      {/* Main layout */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 mb-5">
-        {/* Left Column: Control Sliders */}
         <div>
           <div className="flex items-center gap-2 mb-3">
             <Sliders className="w-3.5 h-3.5 text-cyan-400" />
@@ -815,92 +730,35 @@ export default function ControlWhatIfSimulator(): JSX.Element {
           </div>
         </div>
 
-        {/* Right Column: Chart + Summary */}
         <div>
           <div className="flex items-center gap-2 mb-3">
             <Target className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-xs font-medium text-slate-400 uppercase tracking-wide">
-              {chartType === 'bar'
-                ? 'Risk Mitigation by Domain'
-                : 'Coverage Percentage'}
+              {chartType === 'bar' ? 'Risk Mitigation by Domain' : 'Coverage Percentage'}
             </span>
           </div>
-
           <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-4">
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
                 {chartType === 'bar' ? (
-                  <BarChart
-                    data={barChartData}
-                    margin={{ top: 10, right: 10, left: -10, bottom: 5 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.grid} />
-                    <XAxis
-                      dataKey="name"
-                      stroke={chartTheme.axis}
-                      tick={chartTheme.tick}
-                      axisLine={false}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      stroke={chartTheme.axis}
-                      tick={chartTheme.tick}
-                      axisLine={false}
-                      tickLine={false}
-                      unit="%"
-                    />
+                  <BarChart data={barChartData} margin={{ top: 10, right: 10, left: -10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART_THEME.grid} />
+                    <XAxis dataKey="name" stroke={CHART_THEME.axis} tick={CHART_THEME.tick} axisLine={false} tickLine={false} />
+                    <YAxis stroke={CHART_THEME.axis} tick={CHART_THEME.tick} axisLine={false} tickLine={false} unit="%" />
                     <Tooltip content={<BarTooltip />} cursor={{ fill: '#1e293b' }} />
-                    <Legend
-                      wrapperStyle={{ fontSize: 11, color: '#94a3b8' }}
-                      iconType="circle"
-                    />
-                    <Bar
-                      dataKey="Baseline"
-                      fill="#64748b"
-                      radius={[4, 4, 0, 0]}
-                      barSize={20}
-                    />
-                    <Bar
-                      dataKey="Simulated"
-                      fill="#06b6d4"
-                      radius={[4, 4, 0, 0]}
-                      barSize={20}
-                    />
+                    <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} iconType="circle" />
+                    <Bar dataKey="Baseline" fill="#64748b" radius={[4, 4, 0, 0]} barSize={20} />
+                    <Bar dataKey="Simulated" fill="#06b6d4" radius={[4, 4, 0, 0]} barSize={20} />
                   </BarChart>
                 ) : (
                   <RadarChart data={radarChartData} cx="50%" cy="50%" outerRadius="75%">
-                    <PolarGrid stroke={chartTheme.grid} />
-                    <PolarAngleAxis
-                      dataKey="domain"
-                      tick={{ fill: '#94a3b8', fontSize: 11 }}
-                    />
-                    <PolarRadiusAxis
-                      angle={90}
-                      domain={[0, 100]}
-                      tick={{ fill: '#64748b', fontSize: 9 }}
-                      stroke={chartTheme.grid}
-                    />
+                    <PolarGrid stroke={CHART_THEME.grid} />
+                    <PolarAngleAxis dataKey="domain" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                    <PolarRadiusAxis angle={90} domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 9 }} stroke={CHART_THEME.grid} />
                     <Tooltip content={<RadarTooltip />} />
-                    <Legend
-                      wrapperStyle={{ fontSize: 11, color: '#94a3b8' }}
-                      iconType="circle"
-                    />
-                    <Radar
-                      name="Baseline"
-                      dataKey="Baseline"
-                      stroke="#64748b"
-                      fill="#64748b"
-                      fillOpacity={0.15}
-                      strokeWidth={2}
-                    />
-                    <Radar
-                      name="Simulated"
-                      dataKey="Simulated"
-                      stroke="#06b6d4"
-                      fill="#06b6d4"
-                      fillOpacity={0.25}
-                      strokeWidth={2}
-                    />
+                    <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} iconType="circle" />
+                    <Radar name="Baseline" dataKey="Baseline" stroke="#64748b" fill="#64748b" fillOpacity={0.15} strokeWidth={2} />
+                    <Radar name="Simulated" dataKey="Simulated" stroke="#06b6d4" fill="#06b6d4" fillOpacity={0.25} strokeWidth={2} />
                   </RadarChart>
                 )}
               </ResponsiveContainer>
@@ -909,7 +767,7 @@ export default function ControlWhatIfSimulator(): JSX.Element {
         </div>
       </div>
 
-      {/* Comparison Cards — Baseline vs Simulated */}
+      {/* Comparison cards */}
       <div>
         <div className="flex items-center gap-2 mb-3">
           <Zap className="w-3.5 h-3.5 text-amber-400" />
@@ -924,7 +782,7 @@ export default function ControlWhatIfSimulator(): JSX.Element {
         </div>
       </div>
 
-      {/* 6-Month Predictive Risk Trend Forecast Strip (Backend Powered) */}
+      {/* [FIX #3] Trend forecast — backend returns dollars, convert to $M */}
       {backendResponse?.trendForecast && (
         <div className="mt-5 p-4 bg-slate-900/90 border border-slate-800 rounded-lg">
           <div className="flex items-center justify-between mb-3">
@@ -939,86 +797,62 @@ export default function ControlWhatIfSimulator(): JSX.Element {
             </span>
           </div>
           <div className="grid grid-cols-7 gap-2">
-            {backendResponse.trendForecast.map(
-              (point: NonNullable<BackendSimulationResponse['trendForecast']>[number]) => (
-                <div
-                  key={point.month}
-                  className="bg-slate-950 p-2.5 rounded border border-slate-800 text-center hover:border-cyan-500/30 transition-colors"
-                >
-                  <span className="text-[10px] text-slate-500 uppercase block font-medium">
-                    {point.month}
-                  </span>
-                  <span className="text-xs font-bold font-mono text-cyan-400 mt-1 block">
-                    ${point.projectedEal}M
-                  </span>
-                  <span className="text-[9px] font-mono text-slate-500 block">
-                    VaR: ${point.projectedVar}M
-                  </span>
-                </div>
-              )
-            )}
+            {backendResponse.trendForecast.map((point) => (
+              <div
+                key={point.month}
+                className="bg-slate-950 p-2.5 rounded border border-slate-800 text-center hover:border-cyan-500/30 transition-colors"
+              >
+                <span className="text-[10px] text-slate-500 uppercase block font-medium">
+                  {point.month}
+                </span>
+                <span className="text-xs font-bold font-mono text-cyan-400 mt-1 block">
+                  ${(point.projectedEal / 1_000_000).toFixed(2)}M
+                </span>
+                <span className="text-[9px] font-mono text-slate-500 block">
+                  VaR: ${(point.projectedVar / 1_000_000).toFixed(2)}M
+                </span>
+              </div>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Budget Summary Strip */}
+      {/* Budget summary strip */}
       <div className="mt-5 pt-4 border-t border-slate-800 grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div>
-          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">
-            Baseline Budget
-          </p>
+          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Baseline Budget</p>
           <p className="text-sm font-bold font-mono text-slate-300 tabular-nums mt-0.5">
             ${BASELINE_METRICS.annualBudget.toLocaleString()}K
           </p>
         </div>
         <div>
-          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">
-            Simulated Budget
-          </p>
-          <p
-            className={`text-sm font-bold font-mono tabular-nums mt-0.5 ${
-              simulated.annualBudget > BASELINE_METRICS.annualBudget
-                ? 'text-amber-400'
-                : 'text-emerald-400'
-            }`}
-          >
+          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Simulated Budget</p>
+          <p className={`text-sm font-bold font-mono tabular-nums mt-0.5 ${
+            simulated.annualBudget > BASELINE_METRICS.annualBudget ? 'text-amber-400' : 'text-emerald-400'
+          }`}>
             ${simulated.annualBudget.toLocaleString()}K
           </p>
         </div>
         <div>
-          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">
-            Budget Delta
-          </p>
-          <p
-            className={`text-sm font-bold font-mono tabular-nums mt-0.5 ${
-              simulated.annualBudget - BASELINE_METRICS.annualBudget > 0
-                ? 'text-rose-400'
-                : 'text-emerald-400'
-            }`}
-          >
+          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Budget Delta</p>
+          <p className={`text-sm font-bold font-mono tabular-nums mt-0.5 ${
+            simulated.annualBudget - BASELINE_METRICS.annualBudget > 0 ? 'text-rose-400' : 'text-emerald-400'
+          }`}>
             {simulated.annualBudget - BASELINE_METRICS.annualBudget >= 0 ? '+' : ''}$
             {(simulated.annualBudget - BASELINE_METRICS.annualBudget).toLocaleString()}K
           </p>
         </div>
         <div>
-          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">
-            Annual Loss Avoided
-          </p>
+          <p className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Annual Loss Avoided</p>
           <p className="text-sm font-bold font-mono text-emerald-400 tabular-nums mt-0.5">
-            $
-            {(
-              BASELINE_METRICS.totalExposure - simulated.totalExposure
-            ).toFixed(2)}
-            M
+            ${(BASELINE_METRICS.totalExposure - simulated.totalExposure).toFixed(2)}M
           </p>
         </div>
       </div>
 
-      {/* Footer Legend */}
+      {/* Footer legend */}
       <div className="mt-4 pt-3 border-t border-slate-800 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">
-          Legend:
-        </span>
+        <span className="text-[10px] text-slate-500 uppercase tracking-wide font-medium">Legend:</span>
         <span className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-sm bg-slate-500" />
           <span className="text-[10px] text-slate-400">Baseline Coverage</span>

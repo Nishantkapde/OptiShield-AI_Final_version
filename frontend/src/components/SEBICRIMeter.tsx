@@ -1,16 +1,18 @@
 // SEBICRIMeter.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, memo } from 'react';
 import {
   Shield,
   FileCheck,
-  Download,
   ChevronDown,
   CheckCircle2,
   AlertCircle,
   XCircle,
-  TrendingUp,
   Award,
+  Wrench,
+  ClipboardCheck,
 } from 'lucide-react';
+import { useGlobalState } from '../App';
+import { useAssets } from '../hooks/useAssets';
 
 // --- Interfaces ---
 type FrameworkType = 'ISO 27001' | 'NIST CSF 2.0' | 'SEBI CSCRF';
@@ -22,8 +24,8 @@ interface ComplianceParameter {
   name: string;
   category: string;
   status: ComplianceStatus;
-  maturityScore: number; // 0.0 - 5.0
-  weight: number; // importance 1-10
+  maturityScore: number;
+  weight: number;
 }
 
 interface FrameworkConfig {
@@ -290,7 +292,110 @@ const STATUS_CONFIG: Record<
   },
 };
 
-// --- Main Component ---
+// ============================================================
+// [EXTENDED] Maintenance Audit Panel — reads from live assets
+// ============================================================
+const MaintenanceAuditPanel = memo(() => {
+  const { maintenanceActive, maintenanceTicketId } = useGlobalState();
+  const { data } = useAssets();
+
+  const assetsInMaint = useMemo(
+    () => data?.assets.filter((a) => a.status === 'maintenance') ?? [],
+    [data]
+  );
+
+  const totalPlanned = data?.totals.totalPlannedOperationalCostUsd ?? 0;
+  const suppressedCount = data?.totals.suppressedAlertCount ?? 0;
+  const activeAny = maintenanceActive || assetsInMaint.length > 0;
+
+  // Collect change ticket IDs from live assets, or fall back to the demo toggle
+  const tickets = useMemo(() => {
+    const ids = assetsInMaint
+      .map((a) => a.assessment.changeTicketId)
+      .filter((id): id is string => !!id);
+    if (ids.length > 0) return ids.join(', ');
+    return maintenanceTicketId ?? '—';
+  }, [assetsInMaint, maintenanceTicketId]);
+
+  return (
+    <div
+      className={`mt-5 pt-4 border-t border-slate-800 rounded-lg p-4 ${
+        activeAny
+          ? 'bg-amber-500/5 border border-amber-500/20'
+          : 'bg-slate-900/40 border border-slate-800'
+      }`}
+      role="region"
+      aria-label="Maintenance window audit"
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className={`p-2 rounded-lg border shrink-0 ${
+            activeAny
+              ? 'bg-amber-500/10 border-amber-500/30'
+              : 'bg-slate-800/60 border-slate-700'
+          }`}
+        >
+          <Wrench
+            className={`w-4 h-4 ${
+              activeAny ? 'text-amber-400' : 'text-slate-500'
+            }`}
+          />
+        </div>
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <p
+              className={`text-xs font-semibold ${
+                activeAny ? 'text-amber-400' : 'text-slate-300'
+              }`}
+            >
+              Scheduled Maintenance Window — SEBI CSCRF A.12.1.4
+            </p>
+            {activeAny && (
+              <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                Active
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            {activeAny
+              ? `${assetsInMaint.length} asset${assetsInMaint.length === 1 ? '' : 's'} currently in maintenance. Planned downtime categorised as operational cost; EAL suppression engaged; audit trail emitted per ISO 27001 change management.`
+              : 'No active maintenance window. All unplanned cyber risk is being assessed normally.'}
+          </p>
+
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10px] font-mono">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Change Tickets</span>
+              <span className={activeAny ? 'text-amber-300' : 'text-slate-600'}>
+                {tickets}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500">Planned Cost</span>
+              <span className={activeAny ? 'text-amber-300' : 'text-slate-600'}>
+                {activeAny ? `$${totalPlanned.toLocaleString()}` : '—'}
+              </span>
+            </div>
+          </div>
+
+          {activeAny && (
+            <div className="mt-3 flex items-center gap-1.5 text-[10px] text-emerald-400">
+              <ClipboardCheck className="w-3 h-3" />
+              <span className="font-mono">
+                Audit log emitted · status=SCHEDULED_MAINTENANCE ·{' '}
+                {suppressedCount} alert{suppressedCount === 1 ? '' : 's'} suppressed
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+MaintenanceAuditPanel.displayName = 'MaintenanceAuditPanel';
+
+// ============================================================
+// Main Component
+// ============================================================
 const SEBICRIMeter: React.FC = () => {
   const [selectedFramework, setSelectedFramework] = useState<FrameworkType>('SEBI CSCRF');
   const [showDropdown, setShowDropdown] = useState(false);
@@ -307,13 +412,14 @@ const SEBICRIMeter: React.FC = () => {
     return weightedScore / totalWeight;
   }, []);
 
-  const statusCounts = useMemo(() => {
-    return {
+  const statusCounts = useMemo(
+    () => ({
       compliant: SEBI_PARAMETERS.filter((p) => p.status === 'compliant').length,
       partial: SEBI_PARAMETERS.filter((p) => p.status === 'partial').length,
       'non-compliant': SEBI_PARAMETERS.filter((p) => p.status === 'non-compliant').length,
-    };
-  }, []);
+    }),
+    []
+  );
 
   const filteredParams = useMemo(() => {
     if (filterStatus === 'all') return SEBI_PARAMETERS;
@@ -321,14 +427,8 @@ const SEBICRIMeter: React.FC = () => {
   }, [filterStatus]);
 
   const scorePercent = (overallScore / framework.maxScore) * 100;
-
   const scoreColor =
     scorePercent >= 80 ? '#34d399' : scorePercent >= 60 ? '#f59e0b' : '#f43f5e';
-
-  const handleExportPDF = () => {
-    // In production, this would trigger a PDF generation service
-    console.log(`Exporting ${selectedFramework} audit report...`);
-  };
 
   return (
     <div className="bg-slate-950 border border-slate-800 rounded-xl p-6 shadow-2xl">
@@ -408,7 +508,9 @@ const SEBICRIMeter: React.FC = () => {
               <span className="text-5xl font-bold" style={{ color: scoreColor }}>
                 {overallScore.toFixed(2)}
               </span>
-              <span className="text-xl text-slate-500">/ {framework.maxScore.toFixed(1)}</span>
+              <span className="text-xl text-slate-500">
+                / {framework.maxScore.toFixed(1)}
+              </span>
             </div>
             <p className="text-xs text-slate-400 mt-1">
               Weighted continuous maturity index
@@ -424,7 +526,6 @@ const SEBICRIMeter: React.FC = () => {
               style={{ width: `${scorePercent}%`, backgroundColor: scoreColor }}
             />
           </div>
-          {/* Scale markers */}
           <div className="flex justify-between mt-2 text-xs text-slate-600">
             {[0, 1, 2, 3, 4, 5].map((v) => (
               <span key={v}>{v}.0</span>
@@ -435,7 +536,9 @@ const SEBICRIMeter: React.FC = () => {
         {/* Status Breakdown */}
         <div className="grid grid-cols-3 gap-3 mt-5 pt-4 border-t border-slate-800">
           <button
-            onClick={() => setFilterStatus(filterStatus === 'compliant' ? 'all' : 'compliant')}
+            onClick={() =>
+              setFilterStatus(filterStatus === 'compliant' ? 'all' : 'compliant')
+            }
             className={`text-center p-2 rounded-lg transition-colors ${
               filterStatus === 'compliant' ? 'bg-emerald-500/10' : 'hover:bg-slate-800/50'
             }`}
@@ -445,7 +548,9 @@ const SEBICRIMeter: React.FC = () => {
             <p className="text-xs text-slate-500">Compliant</p>
           </button>
           <button
-            onClick={() => setFilterStatus(filterStatus === 'partial' ? 'all' : 'partial')}
+            onClick={() =>
+              setFilterStatus(filterStatus === 'partial' ? 'all' : 'partial')
+            }
             className={`text-center p-2 rounded-lg transition-colors ${
               filterStatus === 'partial' ? 'bg-amber-500/10' : 'hover:bg-slate-800/50'
             }`}
@@ -463,14 +568,18 @@ const SEBICRIMeter: React.FC = () => {
             }`}
           >
             <XCircle className="w-4 h-4 text-rose-400 mx-auto mb-1" />
-            <p className="text-lg font-bold text-rose-400">{statusCounts['non-compliant']}</p>
+            <p className="text-lg font-bold text-rose-400">
+              {statusCounts['non-compliant']}
+            </p>
             <p className="text-xs text-slate-500">Non-Compliant</p>
           </button>
         </div>
+
+        {/* [EXTENDED] Live maintenance audit — pulls from backend */}
+        <MaintenanceAuditPanel />
       </div>
     </div>
   );
 };
 
 export default SEBICRIMeter;
-           

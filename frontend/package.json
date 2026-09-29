@@ -8,7 +8,13 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json"
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "dev:backend": "tsx watch backend/src/server.ts",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:backend": "tsc -p backend/tsconfig.json",
+    "start:backend": "node backend/dist/server.js",
+    "start:backend:tsx": "tsx backend/src/server.ts",
+    "typecheck:backend": "tsc --noEmit -p backend/tsconfig.json"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

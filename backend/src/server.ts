@@ -1,3 +1,4 @@
+// backend/src/server.ts
 import dotenv from 'dotenv';
 dotenv.config(); // Must be called BEFORE importing routes
 
@@ -5,6 +6,7 @@ import express from 'express';
 import cors from 'cors';
 import privacyRoutes from './routes/privacyRoutes';
 import cascadeRoutes from './routes/cascadeRoutes'; // Pain Point 12 Route Import
+import riskRoutes from './routes/riskRoutes';       // [NEW] Pain Point 1 Maintenance Mode Route Import
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -14,6 +16,7 @@ app.use(express.json());
 
 app.use('/api/privacy', privacyRoutes);
 app.use('/api/cascade', cascadeRoutes); // Pain Point 12 Route Endpoint
+app.use('/api/risk', riskRoutes);       // [NEW] Pain Point 1 Maintenance Mode Endpoint (POST /api/risk/assess)
 
 // Pain Point 11: Shadow Asset Penalization Workflow Route
 app.post('/api/shadow-assets/analyze', async (req, res) => {

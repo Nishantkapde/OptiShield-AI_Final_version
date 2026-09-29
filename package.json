@@ -1,4 +1,19 @@
 {
+  "name": "optishield-ai",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": "tsx watch backend/src/server.ts",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "start:backend": "tsx backend/src/server.ts",
+    "typecheck:backend": "tsc --noEmit -p backend/tsconfig.json"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "zod": "^3.25.76"
+  },
   "devDependencies": {
     "@midscene/web": "^1.12.6",
     "@playwright/test": "^1.63.0",
@@ -10,10 +25,5 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"
-  },
-  "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "cors": "^2.8.6",
-    "express": "^5.2.1"
   }
 }
